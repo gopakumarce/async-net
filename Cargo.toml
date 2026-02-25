@@ -16,7 +16,12 @@ keywords = ["networking", "uds", "mio", "reactor", "std"]
 categories = ["asynchronous", "network-programming", "os"]
 exclude = ["/.*"]
 
+[features]
+default = []
+netstack-backend = ["dep:netstack"]
+
 [dependencies]
 async-io = "2.0.0"
 blocking = "1.0.0"
 futures-lite = "2.0.0"
+netstack = { git = "ssh://git@github.com/gopakumarce/netstack-lib.git", branch = "netstack", optional = true, features = ["async"] }

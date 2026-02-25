@@ -1,19 +1,23 @@
 use std::fmt;
-use std::io::{self, IoSlice, Read as _, Write as _};
+use std::io::{self, IoSlice};
 use std::net::{Shutdown, SocketAddr};
-#[cfg(unix)]
+#[cfg(all(unix, not(feature = "netstack-backend")))]
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "netstack-backend")))]
 use std::os::windows::io::{AsRawSocket, AsSocket, BorrowedSocket, OwnedSocket, RawSocket};
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
+#[cfg(not(feature = "netstack-backend"))]
 use async_io::Async;
 use futures_lite::{prelude::*, ready};
 
+#[cfg(not(feature = "netstack-backend"))]
+use std::sync::Arc;
+
 use crate::addr::AsyncToSocketAddrs;
+use crate::tcp_backend;
 
 /// A TCP server, listening for connections.
 ///
@@ -47,11 +51,11 @@ use crate::addr::AsyncToSocketAddrs;
 /// ```
 #[derive(Clone, Debug)]
 pub struct TcpListener {
-    inner: Arc<Async<std::net::TcpListener>>,
+    inner: tcp_backend::TcpListener,
 }
 
 impl TcpListener {
-    fn new(inner: Arc<Async<std::net::TcpListener>>) -> TcpListener {
+    fn new(inner: tcp_backend::TcpListener) -> TcpListener {
         TcpListener { inner }
     }
 
@@ -94,8 +98,8 @@ impl TcpListener {
         let mut last_err = None;
 
         for addr in addr.to_socket_addrs().await? {
-            match Async::<std::net::TcpListener>::bind(addr) {
-                Ok(listener) => return Ok(TcpListener::new(Arc::new(listener))),
+            match tcp_backend::TcpListener::bind(addr) {
+                Ok(listener) => return Ok(TcpListener::new(listener)),
                 Err(err) => last_err = Some(err),
             }
         }
@@ -122,7 +126,7 @@ impl TcpListener {
     /// println!("Listening on {}", listener.local_addr()?);
     /// # std::io::Result::Ok(()) });
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.inner.get_ref().local_addr()
+        self.inner.local_addr()
     }
 
     /// Accepts a new incoming connection.
@@ -141,7 +145,7 @@ impl TcpListener {
     /// ```
     pub async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
         let (stream, addr) = self.inner.accept().await?;
-        Ok((TcpStream::new(Arc::new(stream)), addr))
+        Ok((TcpStream::new(stream), addr))
     }
 
     /// Returns a stream of incoming connections.
@@ -168,7 +172,7 @@ impl TcpListener {
     /// ```
     pub fn incoming(&self) -> Incoming<'_> {
         Incoming {
-            incoming: Box::pin(self.inner.incoming()),
+            incoming: self.inner.incoming(),
         }
     }
 
@@ -189,7 +193,7 @@ impl TcpListener {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn ttl(&self) -> io::Result<u32> {
-        self.inner.get_ref().ttl()
+        self.inner.ttl()
     }
 
     /// Sets the value of the `IP_TTL` option for this socket.
@@ -208,45 +212,50 @@ impl TcpListener {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
-        self.inner.get_ref().set_ttl(ttl)
+        self.inner.set_ttl(ttl)
     }
 }
 
+#[cfg(not(feature = "netstack-backend"))]
 impl From<Async<std::net::TcpListener>> for TcpListener {
     fn from(listener: Async<std::net::TcpListener>) -> TcpListener {
-        TcpListener::new(Arc::new(listener))
+        TcpListener::new(tcp_backend::TcpListener::from_async(listener))
     }
 }
 
+#[cfg(not(feature = "netstack-backend"))]
 impl TryFrom<std::net::TcpListener> for TcpListener {
     type Error = io::Error;
 
     fn try_from(listener: std::net::TcpListener) -> io::Result<TcpListener> {
-        Ok(TcpListener::new(Arc::new(Async::new(listener)?)))
+        Ok(TcpListener::new(tcp_backend::TcpListener::from_std(
+            listener,
+        )?))
     }
 }
 
+#[cfg(not(feature = "netstack-backend"))]
 impl From<TcpListener> for Arc<Async<std::net::TcpListener>> {
     fn from(val: TcpListener) -> Self {
-        val.inner
+        val.inner.into_async_arc()
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(feature = "netstack-backend")))]
 impl AsRawFd for TcpListener {
     fn as_raw_fd(&self) -> RawFd {
         self.inner.as_raw_fd()
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(feature = "netstack-backend")))]
 impl AsFd for TcpListener {
     fn as_fd(&self) -> BorrowedFd<'_> {
-        self.inner.get_ref().as_fd()
+        self.inner.as_fd()
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(feature = "netstack-backend")))]
 impl TryFrom<OwnedFd> for TcpListener {
     type Error = io::Error;
 
@@ -255,21 +264,21 @@ impl TryFrom<OwnedFd> for TcpListener {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "netstack-backend")))]
 impl AsRawSocket for TcpListener {
     fn as_raw_socket(&self) -> RawSocket {
         self.inner.as_raw_socket()
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "netstack-backend")))]
 impl AsSocket for TcpListener {
     fn as_socket(&self) -> BorrowedSocket<'_> {
-        self.inner.get_ref().as_socket()
+        self.inner.as_socket()
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "netstack-backend")))]
 impl TryFrom<OwnedSocket> for TcpListener {
     type Error = io::Error;
 
@@ -283,8 +292,7 @@ impl TryFrom<OwnedSocket> for TcpListener {
 /// This stream is infinite, i.e awaiting the next connection will never result in [`None`]. It is
 /// created by the [`TcpListener::incoming()`] method.
 pub struct Incoming<'a> {
-    incoming:
-        Pin<Box<dyn Stream<Item = io::Result<Async<std::net::TcpStream>>> + Send + Sync + 'a>>,
+    incoming: Pin<Box<dyn Stream<Item = io::Result<tcp_backend::TcpStream>> + 'a>>,
 }
 
 impl Stream for Incoming<'_> {
@@ -292,7 +300,7 @@ impl Stream for Incoming<'_> {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let res = ready!(Pin::new(&mut self.incoming).poll_next(cx));
-        Poll::Ready(res.map(|res| res.map(|stream| TcpStream::new(Arc::new(stream)))))
+        Poll::Ready(res.map(|res| res.map(TcpStream::new)))
     }
 }
 
@@ -333,16 +341,16 @@ impl fmt::Debug for Incoming<'_> {
 /// # std::io::Result::Ok(()) });
 /// ```
 pub struct TcpStream {
-    inner: Arc<Async<std::net::TcpStream>>,
-    readable: Option<async_io::ReadableOwned<std::net::TcpStream>>,
-    writable: Option<async_io::WritableOwned<std::net::TcpStream>>,
+    inner: tcp_backend::TcpStream,
+    readable: Option<tcp_backend::ReadableOwned>,
+    writable: Option<tcp_backend::WritableOwned>,
 }
 
 impl UnwindSafe for TcpStream {}
 impl RefUnwindSafe for TcpStream {}
 
 impl TcpStream {
-    fn new(inner: Arc<Async<std::net::TcpStream>>) -> TcpStream {
+    fn new(inner: tcp_backend::TcpStream) -> TcpStream {
         TcpStream {
             inner,
             readable: None,
@@ -387,8 +395,8 @@ impl TcpStream {
         let mut last_err = None;
 
         for addr in addr.to_socket_addrs().await? {
-            match Async::<std::net::TcpStream>::connect(addr).await {
-                Ok(stream) => return Ok(TcpStream::new(Arc::new(stream))),
+            match tcp_backend::TcpStream::connect(addr).await {
+                Ok(stream) => return Ok(TcpStream::new(stream)),
                 Err(e) => last_err = Some(e),
             }
         }
@@ -414,7 +422,7 @@ impl TcpStream {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.inner.get_ref().local_addr()
+        self.inner.local_addr()
     }
 
     /// Returns the remote address this stream is connected to.
@@ -430,7 +438,7 @@ impl TcpStream {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn peer_addr(&self) -> io::Result<SocketAddr> {
-        self.inner.get_ref().peer_addr()
+        self.inner.peer_addr()
     }
 
     /// Shuts down the read half, write half, or both halves of this connection.
@@ -451,7 +459,7 @@ impl TcpStream {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn shutdown(&self, how: std::net::Shutdown) -> std::io::Result<()> {
-        self.inner.get_ref().shutdown(how)
+        self.inner.shutdown(how)
     }
 
     /// Receives data without removing it from the queue.
@@ -499,7 +507,7 @@ impl TcpStream {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn nodelay(&self) -> io::Result<bool> {
-        self.inner.get_ref().nodelay()
+        self.inner.nodelay()
     }
 
     /// Sets the value of the `TCP_NODELAY` option for this socket.
@@ -524,7 +532,7 @@ impl TcpStream {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn set_nodelay(&self, nodelay: bool) -> io::Result<()> {
-        self.inner.get_ref().set_nodelay(nodelay)
+        self.inner.set_nodelay(nodelay)
     }
 
     /// Gets the value of the `IP_TTL` option for this socket.
@@ -543,7 +551,7 @@ impl TcpStream {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn ttl(&self) -> io::Result<u32> {
-        self.inner.get_ref().ttl()
+        self.inner.ttl()
     }
 
     /// Sets the value of the `IP_TTL` option for this socket.
@@ -562,7 +570,7 @@ impl TcpStream {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
-        self.inner.get_ref().set_ttl(ttl)
+        self.inner.set_ttl(ttl)
     }
 }
 
@@ -578,41 +586,44 @@ impl Clone for TcpStream {
     }
 }
 
+#[cfg(not(feature = "netstack-backend"))]
 impl From<Async<std::net::TcpStream>> for TcpStream {
     fn from(stream: Async<std::net::TcpStream>) -> TcpStream {
-        TcpStream::new(Arc::new(stream))
+        TcpStream::new(tcp_backend::TcpStream::from_async(stream))
     }
 }
 
+#[cfg(not(feature = "netstack-backend"))]
 impl From<TcpStream> for Arc<Async<std::net::TcpStream>> {
     fn from(val: TcpStream) -> Self {
-        val.inner
+        val.inner.into_async_arc()
     }
 }
 
+#[cfg(not(feature = "netstack-backend"))]
 impl TryFrom<std::net::TcpStream> for TcpStream {
     type Error = io::Error;
 
     fn try_from(stream: std::net::TcpStream) -> io::Result<TcpStream> {
-        Ok(TcpStream::new(Arc::new(Async::new(stream)?)))
+        Ok(TcpStream::new(tcp_backend::TcpStream::from_std(stream)?))
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(feature = "netstack-backend")))]
 impl AsRawFd for TcpStream {
     fn as_raw_fd(&self) -> RawFd {
         self.inner.as_raw_fd()
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(feature = "netstack-backend")))]
 impl AsFd for TcpStream {
     fn as_fd(&self) -> BorrowedFd<'_> {
-        self.inner.get_ref().as_fd()
+        self.inner.as_fd()
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(feature = "netstack-backend")))]
 impl TryFrom<OwnedFd> for TcpStream {
     type Error = io::Error;
 
@@ -621,21 +632,21 @@ impl TryFrom<OwnedFd> for TcpStream {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "netstack-backend")))]
 impl AsRawSocket for TcpStream {
     fn as_raw_socket(&self) -> RawSocket {
         self.inner.as_raw_socket()
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "netstack-backend")))]
 impl AsSocket for TcpStream {
     fn as_socket(&self) -> BorrowedSocket<'_> {
-        self.inner.get_ref().as_socket()
+        self.inner.as_socket()
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "netstack-backend")))]
 impl TryFrom<OwnedSocket> for TcpStream {
     type Error = io::Error;
 
@@ -650,28 +661,8 @@ impl AsyncRead for TcpStream {
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        loop {
-            // Attempt the non-blocking operation.
-            match self.inner.get_ref().read(buf) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
-                res => {
-                    self.readable = None;
-                    return Poll::Ready(res);
-                }
-            }
-
-            // Initialize the future to wait for readiness.
-            if self.readable.is_none() {
-                self.readable = Some(self.inner.clone().readable_owned());
-            }
-
-            // Poll the future for readiness.
-            if let Some(f) = &mut self.readable {
-                let res = ready!(Pin::new(f).poll(cx));
-                self.readable = None;
-                res?;
-            }
-        }
+        let this = &mut *self;
+        this.inner.poll_read(cx, &mut this.readable, buf)
     }
 }
 
@@ -681,57 +672,17 @@ impl AsyncWrite for TcpStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        loop {
-            // Attempt the non-blocking operation.
-            match self.inner.get_ref().write(buf) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
-                res => {
-                    self.writable = None;
-                    return Poll::Ready(res);
-                }
-            }
-
-            // Initialize the future to wait for readiness.
-            if self.writable.is_none() {
-                self.writable = Some(self.inner.clone().writable_owned());
-            }
-
-            // Poll the future for readiness.
-            if let Some(f) = &mut self.writable {
-                let res = ready!(Pin::new(f).poll(cx));
-                self.writable = None;
-                res?;
-            }
-        }
+        let this = &mut *self;
+        this.inner.poll_write(cx, &mut this.writable, buf)
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        loop {
-            // Attempt the non-blocking operation.
-            match self.inner.get_ref().flush() {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
-                res => {
-                    self.writable = None;
-                    return Poll::Ready(res);
-                }
-            }
-
-            // Initialize the future to wait for readiness.
-            if self.writable.is_none() {
-                self.writable = Some(self.inner.clone().writable_owned());
-            }
-
-            // Poll the future for readiness.
-            if let Some(f) = &mut self.writable {
-                let res = ready!(Pin::new(f).poll(cx));
-                self.writable = None;
-                res?;
-            }
-        }
+        let this = &mut *self;
+        this.inner.poll_flush(cx, &mut this.writable)
     }
 
     fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(self.inner.get_ref().shutdown(Shutdown::Write))
+        Poll::Ready(self.inner.shutdown(Shutdown::Write))
     }
 
     fn poll_write_vectored(
@@ -739,27 +690,7 @@ impl AsyncWrite for TcpStream {
         cx: &mut Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        loop {
-            // Attempt the non-blocking operation.
-            match self.inner.get_ref().write_vectored(bufs) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
-                res => {
-                    self.writable = None;
-                    return Poll::Ready(res);
-                }
-            }
-
-            // Initialize the future to wait for readiness.
-            if self.writable.is_none() {
-                self.writable = Some(self.inner.clone().writable_owned());
-            }
-
-            // Poll the future for readiness.
-            if let Some(f) = &mut self.writable {
-                let res = ready!(Pin::new(f).poll(cx));
-                self.writable = None;
-                res?;
-            }
-        }
+        let this = &mut *self;
+        this.inner.poll_write_vectored(cx, &mut this.writable, bufs)
     }
 }

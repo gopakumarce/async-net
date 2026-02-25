@@ -41,6 +41,7 @@ pub mod unix;
 
 mod addr;
 mod tcp;
+mod tcp_backend;
 mod udp;
 
 pub use addr::AsyncToSocketAddrs;
